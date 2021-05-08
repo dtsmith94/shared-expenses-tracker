@@ -1,0 +1,1 @@
+A Golang, MongoDB and React App that simplifies managing shared household expenses between multiple people.
