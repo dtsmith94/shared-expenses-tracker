@@ -10,11 +10,10 @@ func Router() *mux.Router {
 
 	router := mux.NewRouter()
 
-	router.HandleFunc("/api/task", middleware.GetAllTask).Methods("GET", "OPTIONS")
-	router.HandleFunc("/api/task", middleware.CreateTask).Methods("POST", "OPTIONS")
-	router.HandleFunc("/api/task/{id}", middleware.TaskComplete).Methods("PUT", "OPTIONS")
-	router.HandleFunc("/api/undoTask/{id}", middleware.UndoTask).Methods("PUT", "OPTIONS")
-	router.HandleFunc("/api/deleteTask/{id}", middleware.DeleteTask).Methods("DELETE", "OPTIONS")
-	router.HandleFunc("/api/deleteAllTask", middleware.DeleteAllTask).Methods("DELETE", "OPTIONS")
+	router.HandleFunc("/api/expense", middleware.GetAllExpenses).Methods("GET", "OPTIONS")
+	router.HandleFunc("/api/expense", middleware.CreateExpense).Methods("POST", "OPTIONS")
+	router.HandleFunc("/api/expense/{id}", middleware.EditExpense).Methods("PUT", "OPTIONS")
+	router.HandleFunc("/api/expense/{id}", middleware.DeleteExpense).Methods("DELETE", "OPTIONS")
+	router.HandleFunc("/api/expense", middleware.DeleteAllExpenses).Methods("DELETE", "OPTIONS")
 	return router
 }

@@ -6,9 +6,12 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
+	"time"
 
 	"github.com/dtsmith94/shared-expenses-tracker/server/models"
 	"github.com/gorilla/mux"
+	"gopkg.in/yaml.v2"
 
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
@@ -16,16 +19,11 @@ import (
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
-// DB connection string
-// for localhost mongoDB
-// const connectionString = "mongodb://localhost:27017"
-const connectionString = "Connection String"
-
 // Database Name
-const dbName = "test"
+const dbName = "myFirstDatabase"
 
 // Collection name
-const collName = "todolist"
+const collName = "sharedExpenses"
 
 // collection object/instance
 var collection *mongo.Collection
@@ -33,10 +31,20 @@ var collection *mongo.Collection
 // create connection with mongo db
 func init() {
 
-	// Set client options
-	clientOptions := options.Client().ApplyURI(connectionString)
+	f, err := os.Open("config.yml")
+	if err != nil {
+		log.Fatal("Failed to open config file: ", err)
+	}
+	defer f.Close()
 
-	// connect to MongoDB
+	var config models.Config
+	decoder := yaml.NewDecoder(f)
+	err = decoder.Decode(&config)
+	if err != nil {
+		log.Fatal("Failed to decode config file: ", err)
+	}
+
+	clientOptions := options.Client().ApplyURI(config.Database.ConnectionString)
 	client, err := mongo.Connect(context.TODO(), clientOptions)
 
 	if err != nil {
@@ -50,169 +58,188 @@ func init() {
 		log.Fatal(err)
 	}
 
-	fmt.Println("Connected to MongoDB!")
+	fmt.Println("Connected to MongoDB")
 
 	collection = client.Database(dbName).Collection(collName)
+	fmt.Println("Collection instance created")
 
-	fmt.Println("Collection instance created!")
 }
 
-// GetAllTask get all the task route
-func GetAllTask(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Context-Type", "application/x-www-form-urlencoded")
+func setAccessControlHeaders(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
-	payload := getAllTask()
-	json.NewEncoder(w).Encode(payload)
+
+	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Location")
+
 }
 
-// CreateTask create task route
-func CreateTask(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Context-Type", "application/x-www-form-urlencoded")
-	w.Header().Set("Access-Control-Allow-Origin", "*")
-	w.Header().Set("Access-Control-Allow-Methods", "POST")
-	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
-	var task models.ExpenseList
-	_ = json.NewDecoder(r.Body).Decode(&task)
-	// fmt.Println(task, r.Body)
-	insertOneTask(task)
-	json.NewEncoder(w).Encode(task)
+// GetAllExpenses get all the expenses route
+func GetAllExpenses(w http.ResponseWriter, r *http.Request) {
+	setAccessControlHeaders(w)
+	expenses, err := getAllExpenses()
+
+	if err != nil {
+		log.Fatal(err)
+		fmt.Println(err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	json.NewEncoder(w).Encode(expenses)
 }
 
-// TaskComplete update task route
-func TaskComplete(w http.ResponseWriter, r *http.Request) {
+// CreateExpense create expense route
+func CreateExpense(w http.ResponseWriter, r *http.Request) {
+	setAccessControlHeaders(w)
+	var expense models.Expense
+	_ = json.NewDecoder(r.Body).Decode(&expense)
 
-	w.Header().Set("Content-Type", "application/x-www-form-urlencoded")
-	w.Header().Set("Access-Control-Allow-Origin", "*")
-	w.Header().Set("Access-Control-Allow-Methods", "PUT")
-	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+	if len(expense.Name) == 0 || expense.Amount <= 0 {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	id, err := insertExpense(expense)
+
+	if err != nil {
+		log.Fatal(err)
+		fmt.Println(err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	if id != "" {
+		w.Header().Set("Location", r.RequestURI+"/"+id)
+		w.WriteHeader(http.StatusCreated)
+		fmt.Println("Location", r.RequestURI+"/"+id)
+	} else {
+		w.WriteHeader(http.StatusInternalServerError)
+	}
+}
+
+// EditExpense mutate the expense record
+func EditExpense(w http.ResponseWriter, r *http.Request) {
+
+	setAccessControlHeaders(w)
 
 	params := mux.Vars(r)
-	taskComplete(params["id"])
-	json.NewEncoder(w).Encode(params["id"])
-}
 
-// UndoTask undo the complete task route
-func UndoTask(w http.ResponseWriter, r *http.Request) {
+	var expense models.Expense
+	err := json.NewDecoder(r.Body).Decode(&expense)
 
-	w.Header().Set("Content-Type", "application/x-www-form-urlencoded")
-	w.Header().Set("Access-Control-Allow-Origin", "*")
-	w.Header().Set("Access-Control-Allow-Methods", "PUT")
-	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+	if len(expense.Name) == 0 || expense.Amount <= 0 {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
 
-	params := mux.Vars(r)
-	undoTask(params["id"])
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	editExpense(params["id"], expense)
+
 	json.NewEncoder(w).Encode(params["id"])
 }
 
 // DeleteTask delete one task route
-func DeleteTask(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Context-Type", "application/x-www-form-urlencoded")
-	w.Header().Set("Access-Control-Allow-Origin", "*")
-	w.Header().Set("Access-Control-Allow-Methods", "DELETE")
-	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+func DeleteExpense(w http.ResponseWriter, r *http.Request) {
+	setAccessControlHeaders(w)
 	params := mux.Vars(r)
-	deleteOneTask(params["id"])
-	json.NewEncoder(w).Encode(params["id"])
-	// json.NewEncoder(w).Encode("Task not found")
+	err := deleteExpense(params["id"])
 
-}
-
-// DeleteAllTask delete all tasks route
-func DeleteAllTask(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Context-Type", "application/x-www-form-urlencoded")
-	w.Header().Set("Access-Control-Allow-Origin", "*")
-	count := deleteAllTask()
-	json.NewEncoder(w).Encode(count)
-	// json.NewEncoder(w).Encode("Task not found")
-
-}
-
-// get all task from the DB and return it
-func getAllTask() []primitive.M {
-	cur, err := collection.Find(context.Background(), bson.D{{}})
 	if err != nil {
 		log.Fatal(err)
+		fmt.Println(err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
 	}
 
-	var results []primitive.M
-	for cur.Next(context.Background()) {
-		var result bson.M
-		e := cur.Decode(&result)
-		if e != nil {
-			log.Fatal(e)
-		}
-		// fmt.Println("cur..>", cur, "result", reflect.TypeOf(result), reflect.TypeOf(result["_id"]))
-		results = append(results, result)
+	json.NewEncoder(w).Encode(params["id"])
+}
 
-	}
+// DeleteAllExpenses delete all expenses route
+func DeleteAllExpenses(w http.ResponseWriter, r *http.Request) {
+	setAccessControlHeaders(w)
+	count, err := deleteAllExpenses()
 
-	if err := cur.Err(); err != nil {
+	if err != nil {
 		log.Fatal(err)
+		fmt.Println(err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
 	}
 
-	cur.Close(context.Background())
-	return results
+	json.NewEncoder(w).Encode(count)
+
+}
+
+// get all expenses from the DB and return them
+func getAllExpenses() ([]models.Expense, error) {
+	cursor, err := collection.Find(context.Background(), bson.D{{}})
+	if err != nil {
+		return nil, err
+	}
+
+	var results []models.Expense
+	for cursor.Next(context.Background()) {
+		var result models.Expense
+		err = cursor.Decode(&result)
+		if err != nil {
+			return nil, err
+		}
+		results = append(results, result)
+	}
+
+	if err = cursor.Err(); err != nil {
+		return nil, err
+	}
+
+	cursor.Close(context.Background())
+	return results, err
 }
 
 // Insert one task in the DB
-func insertOneTask(task models.ExpenseList) {
-	insertResult, err := collection.InsertOne(context.Background(), task)
+func insertExpense(expense models.Expense) (string, error) {
+	expense.Created = time.Now()
+	expense.Modified = time.Now()
+
+	insertResult, err := collection.InsertOne(context.Background(), expense)
 
 	if err != nil {
-		log.Fatal(err)
+		return "", err
 	}
 
-	fmt.Println("Inserted a Single Record ", insertResult.InsertedID)
+	return insertResult.InsertedID.(primitive.ObjectID).Hex(), err
 }
 
-// task complete method, update task's status to true
-func taskComplete(task string) {
-	fmt.Println(task)
-	id, _ := primitive.ObjectIDFromHex(task)
-	filter := bson.M{"_id": id}
-	update := bson.M{"$set": bson.M{"status": true}}
+// update expense settled status
+func editExpense(id string, expense models.Expense) error {
+	fmt.Println(expense)
+	objectId, _ := primitive.ObjectIDFromHex(id)
+	filter := bson.M{"_id": objectId}
+	update := bson.M{"$set": bson.M{"settled": expense.Settled, "amount": expense.Amount, "modified": time.Now()}}
 	result, err := collection.UpdateOne(context.Background(), filter, update)
-	if err != nil {
-		log.Fatal(err)
-	}
 
 	fmt.Println("modified count: ", result.ModifiedCount)
-}
-
-// task undo method, update task's status to false
-func undoTask(task string) {
-	fmt.Println(task)
-	id, _ := primitive.ObjectIDFromHex(task)
-	filter := bson.M{"_id": id}
-	update := bson.M{"$set": bson.M{"status": false}}
-	result, err := collection.UpdateOne(context.Background(), filter, update)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	fmt.Println("modified count: ", result.ModifiedCount)
+	return err
 }
 
 // delete one task from the DB, delete by ID
-func deleteOneTask(task string) {
-	fmt.Println(task)
-	id, _ := primitive.ObjectIDFromHex(task)
-	filter := bson.M{"_id": id}
+func deleteExpense(id string) error {
+	objectId, _ := primitive.ObjectIDFromHex(id)
+	filter := bson.M{"_id": objectId}
 	d, err := collection.DeleteOne(context.Background(), filter)
-	if err != nil {
-		log.Fatal(err)
-	}
 
 	fmt.Println("Deleted Document", d.DeletedCount)
+	return err
 }
 
-// delete all the tasks from the DB
-func deleteAllTask() int64 {
+// delete all the expenses from the DB
+func deleteAllExpenses() (int64, error) {
 	d, err := collection.DeleteMany(context.Background(), bson.D{{}}, nil)
-	if err != nil {
-		log.Fatal(err)
-	}
 
 	fmt.Println("Deleted Document", d.DeletedCount)
-	return d.DeletedCount
+	return d.DeletedCount, err
 }
