@@ -219,7 +219,7 @@ func editExpense(id string, expense models.Expense) error {
 	fmt.Println(expense)
 	objectId, _ := primitive.ObjectIDFromHex(id)
 	filter := bson.M{"_id": objectId}
-	update := bson.M{"$set": bson.M{"settled": expense.Settled, "amount": expense.Amount, "modified": time.Now()}}
+	update := bson.M{"$set": bson.M{"settled": expense.Settled, "name": expense.Name, "amount": expense.Amount, "modified": time.Now()}}
 	result, err := collection.UpdateOne(context.Background(), filter, update)
 
 	fmt.Println("modified count: ", result.ModifiedCount)
